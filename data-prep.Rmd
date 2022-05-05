@@ -1,0 +1,103 @@
+---
+title: "Data preparation"
+output:
+  pdf_document: default
+---
+
+# Instructions
+
+- You only need to submit the .Rmd of this file, not a PDF.
+
+- You should __comment__ your code clearly to show what you've done to prepare the data.
+
+- The purpose of this file is to use the data in the `data-raw` folder to create the data you will use in the report. The data you will use in the report should be saved in the `data` folder. It is good professional practice to make sure you're never directly modifying your raw data, but instead creating new datasets based on merges/manipulations that you need to reuse.
+
+- Make sure you've taken a look at the hints for the web scraping and census API. 
+
+- You may find the `write_rds()` function from the `readr` package helpful (it is loaded as part of the `tidyverse`).
+
+- You do not need to keep the structure below.
+
+# Set up
+
+```{r, libraries}
+# Set up any libraries you need
+library(tidyverse)
+library(lme4)
+library(ggplot2)
+library(rvest)
+library(polite)
+library(lmtest)
+library(readr)
+library(cancensus)
+library(geojsonsf)
+library(ggpubr)
+library(haven)
+```
+
+# Loading client data
+
+```{r}
+device_data <- read_rds("data-raw/device.Rds")
+customer <- read_rds("data-raw/customer.Rds")
+cust_sleep <- read_rds("data-raw/cust_sleep.Rds")
+cust_dev <- read_rds("data-raw/cust_dev.Rds")
+break_glass_in_case_of_emergency <- read_rds("data-raw/break_glass_in_case_of_emergency.Rds")
+#read in postal code conversion file
+post_file <- read_sav("pccfNat_fccpNat_052020_1.sav")
+```
+
+## merging data 
+```{r}
+common_columns <- intersect(names(cust_dev), names(customer))
+device_customer <- merge.data.frame(cust_dev, customer, all.x=TRUE)
+device_customer <- merge.data.frame(device_customer, cust_sleep, all.x=TRUE)
+device_customer <- merge.data.frame(device_customer, device_data, all.x=TRUE)
+```
+
+# Getting external data
+
+## Web scraping industry data
+
+```{r}
+url <- "https://fitnesstrackerinfohub.netlify.app/"
+session <- bow(url)
+table <- scrape(session) %>% html_nodes("table.table") %>% html_table(fill=TRUE)
+table_info <- table[[1]]
+table_info<- table_info %>% mutate(device_name = table_info[['Device name']])
+
+all_data <- merge.data.frame(table_info, device_customer, all.x = TRUE)
+```
+
+
+
+# Census API
+
+```{r}
+options(cancensus.api_key = "CensusMapper_eec1e4c0a706720ab0b37c63dd5a546e",
+        cancensus.cache_path = "cache") # this sets a folder for your cache
+
+
+# get all regions as at the 2016 Census (2020 not up yet)
+regions <- list_census_regions(dataset = "CA16")
+
+regions_filtered <-  regions %>% 
+  filter(level == "CSD") %>% # Figure out what CSD means in Census data
+  as_census_region_list()
+
+# This can take a while
+# We want to get household median income
+census_data_csd <- get_census(dataset='CA16', regions = regions_filtered,
+                          vectors=c("v_CA16_2397"), 
+                          level='CSD', geo_format = "sf")
+
+# Simplify to only needed variables
+median_income <- census_data_csd %>% 
+  as_tibble() %>% 
+  select(CSDuid = GeoUID, contains("median"), Population) %>% 
+  mutate(CSDuid = parse_number(CSDuid)) %>% 
+  rename(hhld_median_inc = 2)
+```
+
+
+

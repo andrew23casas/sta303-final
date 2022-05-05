@@ -1,0 +1,155 @@
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lme4)
+library(ggplot2)
+library(rvest)
+library(polite)
+library(lmtest)
+library(readr)
+library(cancensus)
+library(geojsonsf)
+library(ggpubr)
+library(haven)
+library(devtools)
+install_github("setempler/miscset")
+```
+
+
+# data to analyse the customers
+
+```{r}
+#clean the conversion file
+post_file <- post_file %>% 
+  select(CSDuid, PC, Comm_Name)%>% 
+  rename('postcode'='PC')
+
+#merge CSDuid
+inc_post_merge <- merge(post_file, median_income, by = "CSDuid")
+
+#change column name to merge to customer dataset
+inc_post_merge <- inc_post_merge %>% 
+  select(-'CSDuid') %>% 
+  unique() 
+
+#merge to customer dataset
+post_cust_merge <- merge(customer, inc_post_merge, by= 'postcode') %>% 
+  select(-'Population',-'emoji_modifier') 
+
+#create main dataset we will use
+income_dev_merge <- merge(post_cust_merge, cust_dev, by="cust_id")
+
+main_data <- merge(income_dev_merge, device_data, by="dev_id") %>% 
+  distinct(cust_id, .keep_all = T) %>% 
+  select(-'device_name') %>% 
+  mutate(prod_cat = case_when(
+    endsWith(line, "L") ~ "Traditional",
+    endsWith(line,"n") ~ "Traditional",
+    endsWith(line,"e")~"Affordable")) 
+
+#make data categorical to visualize
+main_data$dob = round(as.numeric(difftime(Sys.Date(),main_data$dob, units = "weeks"))/52.25)
+
+main_data <- main_data %>% 
+  mutate(age_group = case_when(
+    dob <= 25 ~ "15-25",
+    dob <= 35 ~ "26-35",
+    dob <= 45 ~ "36-45",
+    dob <= 55 ~ "46-55",
+    dob > 55 ~ "55+"
+  )) %>% 
+  mutate(generation = case_when(
+    dob <= 25 ~ "Gen-Z",
+    dob <= 41 ~ "Millenial",
+    dob <= 57 ~ "Gen-X",
+    dob > 57 ~ "Boomer"
+  )) %>%
+  mutate(median_income = case_when(
+    hhld_median_inc <= 60000 ~ "< $60000",
+    hhld_median_inc <= 70000 ~ "$60000 - $70000",
+    hhld_median_inc <= 80000 ~ "$70000 - $80000",
+    hhld_median_inc <= 90000 ~ "$80000 - $90000",
+    hhld_median_inc > 90000 ~ "$90000+"
+  )) %>% 
+  select(-c(cust_id, dev_id, postcode, released)) %>% 
+  rename(age = dob) %>% 
+  drop_na()
+#generation is better than age groups and tax brackets were not worth doing 
+
+#creating bar plot
+sex_graph <- ggplot(data=main_data, aes(x = sex, fill=prod_cat)) +
+  geom_bar(position = 'dodge')+
+  xlab(label = "Sex")+
+  ylab(label = "Number of Customers")+
+  ggtitle("Customer Sex Distribution")+
+  guides(fill=guide_legend(title=NULL))+
+  scale_x_discrete(guide = guide_axis(angle = 50))
+
+gen_graph <- ggplot(data=main_data, aes(x = generation, fill=prod_cat)) +
+  geom_bar(position = 'dodge')+
+  xlab(label = "Generation")+
+  ylab(label = "Number of Customers")+
+  ggtitle("Customer Generation Distribution")+
+  guides(fill=guide_legend(title=NULL))+
+  scale_x_discrete(guide = guide_axis(angle = 50), limits = c("Gen-Z", "Millenial", "Gen-X", "Boomer"))
+
+income_graph <- ggplot(data=main_data, aes(x = median_income, fill=prod_cat)) +
+  geom_bar(position = 'dodge')+
+  xlab(label = "Median Income")+
+  ylab(label = "Number of Customers")+
+  ggtitle("Customer Income Distribution")+
+  guides(fill=guide_legend(title=NULL))+
+  scale_x_discrete(guide = guide_axis(angle = 50), limits=c("< $60000", "$60000 - $70000",
+                                                            "$70000 - $80000", "$80000 - $90000", "$90000+" ))
+pronoun_graph <- ggplot(data=main_data, aes(x = pronouns, fill=prod_cat)) +
+  geom_bar(position = 'dodge')+
+  xlab(label = "Pronouns")+
+  ylab(label = "Number of Customers")+
+  ggtitle("Customer Pronoun Distribution")+
+  guides(fill=guide_legend(title=NULL))+
+  scale_x_discrete(guide = guide_axis(angle = 50))
+
+figure <- ggarrange(sex_graph, gen_graph, income_graph, pronoun_graph,
+                    ncol = 2, nrow = 2)
+
+#creating dataset for models
+model_data <- main_data %>% 
+    mutate(binary_prod_cat = case_when(
+    endsWith(prod_cat, "l") ~ 0,
+    endsWith(prod_cat,"e") ~ 1))
+
+
+```
+
+# data to compare Mingar and Bitfit
+
+```{r}
+
+needed_postcodes <- c()
+merged_df <- merge(x = all_data, y = post_file, by = "postcode", all.x = TRUE)
+
+final_data<- merge(x=merged_df, y=median_income, all.x = TRUE)
+#removing na data
+final_data<- final_data[!is.na(final_data$hhld_median_inc),]
+
+final_data[, 'device_name'] <- as.factor(final_data[, 'device_name'])
+
+#changing column names to contain no spaces
+names(final_data)<-make.names(names(final_data),unique = TRUE)
+
+```
+
+```{r}
+
+# create a visualization
+final_data %>% 
+  ggplot(aes(x = Recommended.retail.price)) + geom_bar(width = 25, fill="grey", color="black") + facet_wrap(~Pulse.oximiter) + ggtitle("Pulse Oximeter Feature and price")
+
+ggplotGrid(ncol = 2,
+  lapply(c("Contactless.payments", "Sleep.tracking", "Pulse.oximiter", "Heart.rate.sensor"),
+    function(col) {
+        ggplot(final_data, aes_string(col)) + geom_bar() + coord_flip()
+    }))
+```
+
